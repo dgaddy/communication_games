@@ -114,7 +114,7 @@ def make_inputs(vocab_size):
     values2 = torch.LongTensor(values2).cuda()
     return values1, values2
 
-def train(t1, t2, model_file=None):
+def train(t1, t2, iterations, model_file=None):
     vocab_size = 10
 
     values1, values2 = make_inputs(vocab_size)
@@ -124,9 +124,8 @@ def train(t1, t2, model_file=None):
 
     net.train()
     total_cost = 0
-    n_iters = 40000
-    temperatures = np.geomspace(t1,t2,n_iters)
-    for episode in xrange(1,n_iters+1):
+    temperatures = np.geomspace(t1,t2,iterations)
+    for episode in xrange(1,iterations+1):
         points1 = Variable(values1)
         points2 = Variable(values2)
 
@@ -165,10 +164,12 @@ def display(net, vocab_size):
     plt.savefig('basic_comm_averaged_messages.png')
 
 for _ in xrange(5):
-    t1=1
+    t1=5
     t2=1
+    i = 25000
     print '=============================='
     print 'training with t1, t2=', t1, t2
-    train(t1, t2)
+    print 'iterations=', i
+    train(t1, t2, i)
 
 
