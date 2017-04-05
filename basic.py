@@ -1,6 +1,8 @@
 import math
 import numpy as np
 import random
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 import torch
@@ -75,21 +77,23 @@ class Net(nn.Module):
 
         h = Variable(torch.zeros(batch_size, self.hidden_size)).cuda()
         c = Variable(torch.zeros(batch_size, self.hidden_size)).cuda()
+        results1 = []
+        results2 = []
         for o in outs:
             h,c = self.lstm_in(o,(h,c))
 
-        results = self.fc_final(F.dropout(c, dropout))
-        result1 = F.log_softmax(results[:,:10])
-        result2 = F.log_softmax(results[:,10:])
+            results = self.fc_final(c)
+            results1.append(F.log_softmax(results[:,:10]))
+            results2.append(F.log_softmax(results[:,10:]))
 
-        return result1, result2, outs
+        return results1, results2, outs
 
     def update_temp(self, temp):
         self.temp = temp
 
 def loss(output, target):
     values = torch.gather(output, 1, target.view(-1,1))
-    return -values.mean() - torch.exp(values).mean()
+    return -values.mean()# - torch.exp(values).mean()
 
 def evaluate(net, values1, values2, noise):
     net.eval()
@@ -97,8 +101,8 @@ def evaluate(net, values1, values2, noise):
     points2 = Variable(values2)
 
     out1, out2,_ = net(points1, points2, noise)
-    _, out1 = out1.data.max(1)
-    _, out2 = out2.data.max(1)
+    _, out1 = out1[-1].data.max(1)
+    _, out2 = out2[-1].data.max(1)
 
     n_correct = (out1 == points1.data).sum()+(out2 == points2.data).sum()
     n_total = out1.size()[0] * 2
@@ -114,7 +118,7 @@ def make_inputs(vocab_size):
     values2 = torch.LongTensor(values2).cuda()
     return values1, values2
 
-def train(t1, t2, iterations, model_file=None):
+def train(t1, t2, iterations, all_loss=False, model_file=None):
     vocab_size = 10
 
     values1, values2 = make_inputs(vocab_size)
@@ -133,7 +137,14 @@ def train(t1, t2, iterations, model_file=None):
         optimizer.zero_grad()
 
         out1, out2, _ = net(points1, points2)
-        cost = loss(out1, points1) + loss(out2, points2)
+        if all_loss:
+            cost = Variable(torch.zeros(1).cuda())
+            for r in out1:
+                cost = cost + loss(r, points1)
+            for r in out2:
+                cost = cost + loss(r, points2)
+        else:
+            cost = loss(out1[-1], points1) + loss(out2[-1], points2)
         cost.backward()
         total_cost += cost.data[0]
         optimizer.step()
@@ -163,13 +174,13 @@ def display(net, vocab_size):
     plt.matshow(messages_sums,cmap=plt.cm.gray)
     plt.savefig('basic_comm_averaged_messages.png')
 
-for _ in xrange(5):
+for repeat in xrange(5):
     t1=5
     t2=1
     i = 25000
+    all_loss = True
     print '=============================='
     print 'training with t1, t2=', t1, t2
     print 'iterations=', i
-    train(t1, t2, i)
-
-
+    print 'all_loss=', all_loss
+    train(t1, t2, i, all_loss)
