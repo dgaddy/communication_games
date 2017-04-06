@@ -91,9 +91,13 @@ class Net(nn.Module):
     def update_temp(self, temp):
         self.temp = temp
 
-def loss(output, target):
+def loss(output, target, mask_zero=False):
     values = torch.gather(output, 1, target.view(-1,1))
-    return -values.mean()# - torch.exp(values).mean()
+    if mask_zero:
+        mask = (target != 0).float()
+        return -(values*mask).mean()# - torch.exp(values).mean()
+    else:
+        return -values.mean()
 
 def evaluate(net, values1, values2, noise):
     net.eval()
@@ -118,7 +122,7 @@ def make_inputs(vocab_size):
     values2 = torch.LongTensor(values2).cuda()
     return values1, values2
 
-def train(t1, t2, iterations, all_loss=False, model_file=None):
+def train(t1, t2, iterations, all_loss=False, mask_item_zero=False, model_file=None):
     vocab_size = 10
 
     values1, values2 = make_inputs(vocab_size)
@@ -140,11 +144,11 @@ def train(t1, t2, iterations, all_loss=False, model_file=None):
         if all_loss:
             cost = Variable(torch.zeros(1).cuda())
             for r in out1:
-                cost = cost + loss(r, points1)
+                cost = cost + loss(r, points1, mask_item_zero)
             for r in out2:
-                cost = cost + loss(r, points2)
+                cost = cost + loss(r, points2, mask_item_zero)
         else:
-            cost = loss(out1[-1], points1) + loss(out2[-1], points2)
+            cost = loss(out1[-1], points1, mask_item_zero) + loss(out2[-1], points2, mask_item_zero)
         cost.backward()
         total_cost += cost.data[0]
         optimizer.step()
@@ -158,29 +162,79 @@ def train(t1, t2, iterations, all_loss=False, model_file=None):
     if model_file is not None:
         torch.save(net, model_file)
 
-def display(net, vocab_size):
+def display(net, vocab_size, name='basic', sample=True, averaged=False, contribution=True, evalall=True):
+    net.eval()
+
     values1, values2 = make_inputs(vocab_size)
-    _, _, messages = net(Variable(values1), Variable(values2))
-    messages = np.array([m.data.cpu().numpy() for m in messages]).squeeze().T
-    plt.matshow(messages,cmap=plt.cm.gray)
-    plt.savefig('basic_comm_sample_message.png')
-
-    messages_sums = np.zeros((vocab_size**2,25))
-    for i in xrange(10):
+    if sample:
         _, _, messages = net(Variable(values1), Variable(values2))
-        messages = np.array([m.data.cpu().round_().numpy() for m in messages]).squeeze().T
-        messages_sums += messages
+        messages = np.array([m.data.cpu().numpy() for m in messages]).squeeze().T
+        plt.matshow(messages,cmap=plt.cm.gray)
+        plt.savefig('%s_sample.png'%name)
 
-    plt.matshow(messages_sums,cmap=plt.cm.gray)
-    plt.savefig('basic_comm_averaged_messages.png')
+    if averaged:
+        messages_sums = np.zeros((vocab_size**2,25))
+        for i in xrange(10):
+            _, _, messages = net(Variable(values1), Variable(values2))
+            messages = np.array([m.data.cpu().round_().numpy() for m in messages]).squeeze().T
+            messages_sums += messages
 
-for repeat in xrange(5):
-    t1=5
-    t2=1
-    i = 25000
-    all_loss = True
-    print '=============================='
-    print 'training with t1, t2=', t1, t2
-    print 'iterations=', i
-    print 'all_loss=', all_loss
-    train(t1, t2, i, all_loss)
+        plt.matshow(messages_sums,cmap=plt.cm.gray)
+        plt.savefig('%s_averaged.png'%name)
+
+    def dist(d1, d2):
+        # the rows of d1 and d2 are log probability distributions - compute a distance between them
+        return abs(np.exp(d1)-np.exp(d2)).sum(axis=1)
+
+    def contrib(outs, filename):
+        prev = np.log(np.ones_like(outs[0]) /  outs[0].shape[1])
+        distances = np.zeros((outs[0].shape[0],len(outs)))
+        for i, out in enumerate(outs):
+            d = dist(prev, out)
+            distances[:, i] = d
+            prev = out
+        plt.matshow(distances,cmap=plt.cm.gray)
+        plt.colorbar()
+        plt.savefig(filename)
+
+    if contribution:
+        out1, out2, _ = net(Variable(values1), Variable(values2))
+        out1 = [o.data.cpu().numpy() for o in out1]
+        out2 = [o.data.cpu().numpy() for o in out2]
+        contrib(out1, '%s_contribution1.png'%name)
+        contrib(out2, '%s_contribution2.png'%name)
+
+    def e(outs, targets, filename):
+        result = np.zeros((outs[0].size()[0],len(outs)))
+        for i, out in enumerate(outs):
+            _, out = out.data.max(1)
+            correct = out == targets
+            correct = correct.squeeze().cpu().numpy()
+            result[:,i] = correct
+        plt.matshow(result,cmap=plt.cm.gray)
+        plt.savefig(filename)
+            
+    if evalall:
+        out1, out2,_ = net(Variable(values1), Variable(values2))
+        
+        e(out1, values1, '%s_evalall1.png'%name)
+        e(out2, values2, '%s_evalall2.png'%name)
+
+    net.train()
+
+if 1:
+    for repeat in xrange(5):
+        t1=5
+        t2=1
+        i = 25000
+        all_loss = True
+        mask_zero_item = False
+        print '=============================='
+        print 'training with t1, t2=', t1, t2
+        print 'iterations=', i
+        print 'all_loss=', all_loss
+        train(t1, t2, i, all_loss, mask_zero_item, model_file='model%s.pkl'%repeat)
+else:
+    for repeat in xrange(5):
+        model = torch.load('model%s.pkl'%repeat)
+        display(model, 10, 'messages%s'%repeat, sample=True, contribution=True, evalall=True)
